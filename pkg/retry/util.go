@@ -41,15 +41,18 @@ const (
 	// CtxReqOp is used to ignore RPC Request concurrent write
 	CtxReqOp ctxKey = "K_REQ_OP"
 
+	// CtxRespOp is used to ignore RPC Response concurrent write/read.
+	CtxRespOp ctxKey = "K_RESP_OP"
+
 	// Wildcard stands for 'any method' when associated with a retryer.
 	Wildcard = "*"
 )
 
-// Req write stat, just be useful when concurrent write may happen
+// Req or Resp operation state, just be useful when concurrent write may happen
 const (
-	ReqOpNo int32 = iota
-	ReqOpDoing
-	ReqOpDone
+	OpNo int32 = iota
+	OpDoing
+	OpDone
 )
 
 // DDLStopFunc is the definition of ddlStop func

@@ -38,6 +38,8 @@ var (
 	ErrBiz               = &basicError{"biz error"}
 
 	ErrRetry = &basicError{"retry error"}
+	// it happens when retry enabled and there is one call has finished
+	ErrRPCFinish = &basicError{"rpc call finished"}
 )
 
 // More detailed error types

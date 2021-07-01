@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/circuitbreaker"
@@ -192,10 +193,19 @@ func (rc *Container) WithRetryIfNeeded(ctx context.Context, rpcCall RPCCallFunc,
 	}
 
 	// case 3: retry
-	var reqOp = ReqOpNo
-	// reqOp is used for req concurrent write
+	// reqOp is used to ignore req concurrent write
+	var reqOp = OpNo
+	// respOp is used to ignore resp concurrent write and read, especially in backup request
+	var respOp = OpNo
 	ctx = context.WithValue(ctx, CtxReqOp, &reqOp)
-	return retryer.Do(ctx, rpcCall, ri, request)
+	ctx = context.WithValue(ctx, CtxRespOp, &respOp)
+
+	// do rpc call with retry policy
+	recycleRI, err = retryer.Do(ctx, rpcCall, ri, request)
+
+	// the rpc call has finished, modify respOp to done state.
+	atomic.StoreInt32(&respOp, OpDone)
+	return
 }
 
 // NewRetryer build a retryer with policy

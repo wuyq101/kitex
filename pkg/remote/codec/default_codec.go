@@ -20,9 +20,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 
+	"github.com/cloudwego/kitex/pkg/kerrors"
 	"github.com/cloudwego/kitex/pkg/remote"
 	"github.com/cloudwego/kitex/pkg/remote/codec/perrors"
+	"github.com/cloudwego/kitex/pkg/retry"
 	"github.com/cloudwego/kitex/pkg/rpcinfo"
 	"github.com/cloudwego/kitex/pkg/serviceinfo"
 	"github.com/cloudwego/kitex/transport"
@@ -120,7 +123,10 @@ func (c *defaultCodec) Decode(ctx context.Context, message remote.Message, in re
 		return perrors.NewProtocolErrorWithErrMsg(err, fmt.Sprintf("default codec read failed: %s", err.Error()))
 	}
 
-	// TODO since the protocol on a connection is consistent, we can skip the checks below to optimize performance.
+	if err = checkRPCState(ctx); err != nil {
+		// there is one call has finished in retry task, it doesn't need to do decode for this call
+		return err
+	}
 	// 1. decode header
 	if IsTTHeader(flagBuf) {
 		// TTHeader
@@ -156,51 +162,6 @@ func (c *defaultCodec) Decode(ctx context.Context, message remote.Message, in re
 	if err := c.decodePayload(ctx, message, in); err != nil {
 		return err
 	}
-	return nil
-}
-
-func checkPayload(flagBuf []byte, message remote.Message, in remote.ByteBuffer, isTTHeader bool) error {
-	var transProto transport.Protocol
-	var codecType serviceinfo.PayloadCodec
-	if isThriftBinary(flagBuf) {
-		codecType = serviceinfo.Thrift
-		if isTTHeader {
-			transProto = transport.TTHeader
-		} else {
-			transProto = transport.PurePayload
-		}
-	} else if isThriftFramedBinary(flagBuf) {
-		codecType = serviceinfo.Thrift
-		if isTTHeader {
-			transProto = transport.TTHeaderFramed
-		} else {
-			transProto = transport.Framed
-		}
-		payloadLen := binary.BigEndian.Uint32(flagBuf[:Size32])
-		message.SetPayloadLen(int(payloadLen))
-		if _, err := in.Next(Size32); err != nil {
-			return err
-		}
-	} else if isProtobufKitex(flagBuf) {
-		codecType = serviceinfo.Protobuf
-		if isTTHeader {
-			transProto = transport.TTHeaderFramed
-		} else {
-			transProto = transport.Framed
-		}
-		payloadLen := binary.BigEndian.Uint32(flagBuf[:Size32])
-		message.SetPayloadLen(int(payloadLen))
-		if _, err := in.Next(Size32); err != nil {
-			return err
-		}
-	} else {
-		first4Bytes := binary.BigEndian.Uint32(flagBuf[:Size32])
-		second4Bytes := binary.BigEndian.Uint32(flagBuf[Size32:])
-		// 0xfff4fffd is the interrupt message of telnet
-		err := perrors.NewProtocolErrorWithMsg(fmt.Sprintf("invalid payload (first4Bytes=%#x, second4Bytes=%#x)", first4Bytes, second4Bytes))
-		return err
-	}
-	message.SetProtocolInfo(remote.NewProtocolInfo(transProto, codecType))
 	return nil
 }
 
@@ -279,4 +240,56 @@ func isThriftBinary(flagBuf []byte) bool {
  */
 func isThriftFramedBinary(flagBuf []byte) bool {
 	return binary.BigEndian.Uint32(flagBuf[Size32:])&MagicMask == ThriftV1Magic
+}
+
+func checkRPCState(ctx context.Context) error {
+	if respOp, ok := ctx.Value(retry.CtxRespOp).(*int32); ok && atomic.LoadInt32(respOp) == retry.OpDone {
+		return kerrors.ErrRPCFinish
+	}
+	return nil
+}
+
+func checkPayload(flagBuf []byte, message remote.Message, in remote.ByteBuffer, isTTHeader bool) error {
+	var transProto transport.Protocol
+	var codecType serviceinfo.PayloadCodec
+	if isThriftBinary(flagBuf) {
+		codecType = serviceinfo.Thrift
+		if isTTHeader {
+			transProto = transport.TTHeader
+		} else {
+			transProto = transport.PurePayload
+		}
+	} else if isThriftFramedBinary(flagBuf) {
+		codecType = serviceinfo.Thrift
+		if isTTHeader {
+			transProto = transport.TTHeaderFramed
+		} else {
+			transProto = transport.Framed
+		}
+		payloadLen := binary.BigEndian.Uint32(flagBuf[:Size32])
+		message.SetPayloadLen(int(payloadLen))
+		if _, err := in.Next(Size32); err != nil {
+			return err
+		}
+	} else if isProtobufKitex(flagBuf) {
+		codecType = serviceinfo.Protobuf
+		if isTTHeader {
+			transProto = transport.TTHeaderFramed
+		} else {
+			transProto = transport.Framed
+		}
+		payloadLen := binary.BigEndian.Uint32(flagBuf[:Size32])
+		message.SetPayloadLen(int(payloadLen))
+		if _, err := in.Next(Size32); err != nil {
+			return err
+		}
+	} else {
+		first4Bytes := binary.BigEndian.Uint32(flagBuf[:Size32])
+		second4Bytes := binary.BigEndian.Uint32(flagBuf[Size32:])
+		// 0xfff4fffd is the interrupt message of telnet
+		err := perrors.NewProtocolErrorWithMsg(fmt.Sprintf("invalid payload (first4Bytes=%#x, second4Bytes=%#x)", first4Bytes, second4Bytes))
+		return err
+	}
+	message.SetProtocolInfo(remote.NewProtocolInfo(transProto, codecType))
+	return nil
 }

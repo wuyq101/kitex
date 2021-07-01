@@ -145,8 +145,8 @@ func (c *binaryThriftCodec) Name() string {
 func readBinaryMethod(buff []byte, msg remote.Message) error {
 	bufLen := len(buff)
 	if bufLen < codec.Size32*2 {
-		return perrors.NewProtocolErrorWithMsg("invalid trans buffer in binaryThriftCodec Unmarshal," +
-			"size less than 8 bytes")
+		return perrors.NewProtocolErrorWithMsg(
+			fmt.Sprintf("invalid trans buffer in binaryThriftCodec Unmarshal, size=%d less than 8 bytes", bufLen))
 	}
 	methodLen := int(binary.BigEndian.Uint32(buff[4:8]))
 	if bufLen < codec.Size32*2+methodLen || methodLen <= 0 {
